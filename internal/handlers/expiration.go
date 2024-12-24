@@ -72,6 +72,5 @@ func ExpirePoints(db *sql.DB) {
 		log.Println("Failed to commit transaction:", err)
 		return
 	}
-
 	log.Println("Points expiration job completed successfully.")
 }
