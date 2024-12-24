@@ -8,16 +8,6 @@ import (
 	"net/http"
 )
 
-type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-type TokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-}
-
 func RefreshTokenHandler(w http.ResponseWriter, r *http.Request, db *sql.DB, cfg *config.Config) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

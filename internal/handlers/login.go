@@ -11,9 +11,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// LoginHandler handles user login and logs the action
 func LoginHandler(w http.ResponseWriter, r *http.Request, db *sql.DB, cfg *config.Config) {
 	// Parse the request body
-	var req LoginRequest
+	var req models.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
@@ -55,9 +56,12 @@ func LoginHandler(w http.ResponseWriter, r *http.Request, db *sql.DB, cfg *confi
 		return
 	}
 
+	// Log the login action
+	utils.LogAction(db, user.ID, "Login", "User logged in successfully")
+
 	// Respond with tokens
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(TokenResponse{
+	json.NewEncoder(w).Encode(models.TokenResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 	})
