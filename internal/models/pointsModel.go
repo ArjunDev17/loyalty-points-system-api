@@ -15,7 +15,7 @@ type PointsHistoryResponse struct {
 	Points          int       `json:"points"`
 	TransactionType string    `json:"transaction_type"`
 	TransactionDate time.Time `json:"transaction_date"`
-	//Reason          string    `json:"reason,omitempty"` // Optional: only for expired transactions
+	Reason          string    `json:"reason,omitempty"` // Optional: only for expired transactions
 }
 
 type RedeemRequest struct {

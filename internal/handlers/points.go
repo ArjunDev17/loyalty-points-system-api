@@ -5,17 +5,22 @@ import (
 	"encoding/json"
 	"log"
 	"loyalty-points-system-api/internal/models"
+	response "loyalty-points-system-api/internal/reponse"
 	"net/http"
 )
 
-// (w http.ResponseWriter, r *http.Request, db *sql.DB) {
+// RedeemPointsHandler handles point redemption and logs the action
 func RedeemPointsHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	log.Println("RedeemPointsHandler: Starting to process redeem points request.")
 
 	var req models.RedeemRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("Error decoding request body: %v", err)
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		response.WriteErrorResponse(w, http.StatusBadRequest, response.APIError{
+			Code:    "400",
+			Msg:     "Invalid Request Body",
+			Details: "Failed to decode JSON body",
+		})
 		return
 	}
 
@@ -24,12 +29,16 @@ func RedeemPointsHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	// Get the user's total valid points
 	var totalPoints int
 	err := db.QueryRow(`
-			SELECT COALESCE(SUM(points), 0) FROM points
-			WHERE user_id = ? AND valid_until > NOW()
-		`, req.UserID).Scan(&totalPoints)
+		SELECT COALESCE(SUM(points), 0) FROM points
+		WHERE user_id = ? AND valid_until > NOW()
+	`, req.UserID).Scan(&totalPoints)
 	if err != nil {
 		log.Printf("Error fetching user points for user %d: %v", req.UserID, err)
-		http.Error(w, "Failed to fetch user points", http.StatusInternalServerError)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Internal Server Error",
+			Details: "Failed to fetch user points",
+		})
 		return
 	}
 
@@ -38,9 +47,10 @@ func RedeemPointsHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	// Check if user has enough points
 	if req.Points > totalPoints {
 		log.Printf("Insufficient points for user %d: requested %d, available %d.", req.UserID, req.Points, totalPoints)
-		json.NewEncoder(w).Encode(models.RedeemResponse{
-			Success: false,
-			Message: "Insufficient points",
+		response.WriteErrorResponse(w, http.StatusBadRequest, response.APIError{
+			Code:    "400",
+			Msg:     "Insufficient Points",
+			Details: "User does not have enough points for redemption",
 		})
 		return
 	}
@@ -49,20 +59,28 @@ func RedeemPointsHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	tx, err := db.Begin()
 	if err != nil {
 		log.Printf("Error starting database transaction: %v", err)
-		http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Internal Server Error",
+			Details: "Failed to start transaction",
+		})
 		return
 	}
 
 	pointsToRedeem := req.Points
 	rows, err := tx.Query(`
-			SELECT id, points FROM points
-			WHERE user_id = ? AND valid_until > NOW()
-			ORDER BY valid_until ASC
-		`, req.UserID)
+		SELECT id, points FROM points
+		WHERE user_id = ? AND valid_until > NOW()
+		ORDER BY valid_until ASC
+	`, req.UserID)
 	if err != nil {
 		log.Printf("Error fetching points for redemption for user %d: %v", req.UserID, err)
 		tx.Rollback()
-		http.Error(w, "Failed to fetch points for redemption", http.StatusInternalServerError)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Internal Server Error",
+			Details: "Failed to fetch points for redemption",
+		})
 		return
 	}
 	defer rows.Close()
@@ -72,7 +90,11 @@ func RedeemPointsHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		if err := rows.Scan(&id, &availablePoints); err != nil {
 			log.Printf("Error scanning points row for user %d: %v", req.UserID, err)
 			tx.Rollback()
-			http.Error(w, "Error processing points", http.StatusInternalServerError)
+			response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+				Code:    "500",
+				Msg:     "Internal Server Error",
+				Details: "Error processing points",
+			})
 			return
 		}
 
@@ -89,7 +111,11 @@ func RedeemPointsHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		if err != nil {
 			log.Printf("Error updating points for user %d in row %d: %v", req.UserID, id, err)
 			tx.Rollback()
-			http.Error(w, "Failed to update points", http.StatusInternalServerError)
+			response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+				Code:    "500",
+				Msg:     "Internal Server Error",
+				Details: "Failed to update points",
+			})
 			return
 		}
 	}
@@ -97,48 +123,61 @@ func RedeemPointsHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	// Commit the transaction
 	if err := tx.Commit(); err != nil {
 		log.Printf("Error committing transaction for user %d: %v", req.UserID, err)
-		http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Internal Server Error",
+			Details: "Failed to commit transaction",
+		})
 		return
 	}
 
 	// Get the remaining points
 	var remainingPoints int
 	err = db.QueryRow(`
-			SELECT COALESCE(SUM(points), 0) FROM points
-			WHERE user_id = ? AND valid_until > NOW()
-		`, req.UserID).Scan(&remainingPoints)
+		SELECT COALESCE(SUM(points), 0) FROM points
+		WHERE user_id = ? AND valid_until > NOW()
+	`, req.UserID).Scan(&remainingPoints)
 	if err != nil {
 		log.Printf("Error fetching remaining points for user %d: %v", req.UserID, err)
-		http.Error(w, "Failed to fetch remaining points", http.StatusInternalServerError)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Internal Server Error",
+			Details: "Failed to fetch remaining points",
+		})
 		return
 	}
 
 	log.Printf("RedeemPointsHandler: Successfully redeemed points for user %d. Remaining points: %d.", req.UserID, remainingPoints)
 
 	// Respond with success
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(models.RedeemResponse{
-		Success:         true,
-		Message:         "Points redeemed successfully",
-		RemainingPoints: remainingPoints,
-	})
+	response.WriteSuccessResponse(w, map[string]interface{}{
+		"remaining_points": remainingPoints,
+	}, "Points redeemed successfully")
 }
 
+// PointsHistoryHandler handles retrieving a user's points history
 func PointsHistoryHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	log.Println("PointsHistoryHandler: Starting to process points history request.")
 
 	var req models.PointsHistoryRequest
 	if r.Body == nil {
 		log.Println("PointsHistoryHandler: Request body is empty.")
-		http.Error(w, "Request body cannot be empty", http.StatusBadRequest)
+		response.WriteErrorResponse(w, http.StatusBadRequest, response.APIError{
+			Code:    "400",
+			Msg:     "Empty Request Body",
+			Details: "Request body cannot be empty",
+		})
 		return
 	}
 
 	// Decode request body
-	// Decode request body
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("Error decoding request body: %v", err)
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		response.WriteErrorResponse(w, http.StatusBadRequest, response.APIError{
+			Code:    "400",
+			Msg:     "Invalid Request Payload",
+			Details: "Failed to decode JSON body",
+		})
 		return
 	}
 
@@ -171,7 +210,11 @@ func PointsHistoryHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		log.Printf("Error executing query to fetch points history: %v", err)
-		http.Error(w, "Failed to fetch points history", http.StatusInternalServerError)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Internal Server Error",
+			Details: "Failed to fetch points history",
+		})
 		return
 	}
 	defer rows.Close()
@@ -185,7 +228,11 @@ func PointsHistoryHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			&record.TransactionDate, &record.Reason,
 		); err != nil {
 			log.Printf("Error scanning points history row: %v", err)
-			http.Error(w, "Failed to process points history", http.StatusInternalServerError)
+			response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+				Code:    "500",
+				Msg:     "Internal Server Error",
+				Details: "Failed to process points history",
+			})
 			return
 		}
 		history = append(history, record)
@@ -194,12 +241,15 @@ func PointsHistoryHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	// Check for errors during row iteration
 	if err := rows.Err(); err != nil {
 		log.Printf("Error iterating over rows: %v", err)
-		http.Error(w, "Failed to process points history", http.StatusInternalServerError)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Internal Server Error",
+			Details: "Failed to process points history",
+		})
 		return
 	}
 
 	// Respond with the history
 	log.Printf("PointsHistoryHandler: Successfully retrieved %d records for user_id: %d", len(history), req.UserID)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(history)
+	response.WriteSuccessResponse(w, history, "Points history retrieved successfully")
 }

@@ -3,8 +3,8 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"loyalty-points-system-api/internal/models"
+	response "loyalty-points-system-api/internal/reponse"
 	"loyalty-points-system-api/internal/utils"
 	"net/http"
 
@@ -13,28 +13,45 @@ import (
 )
 
 // CreateUserHandler handles user creation and logs the action
+// CreateUserHandler handles user creation and logs the action
 func CreateUserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		response.WriteErrorResponse(w, http.StatusMethodNotAllowed, response.APIError{
+			Code:    "405",
+			Msg:     "Method Not Allowed",
+			Details: "Only POST method is allowed",
+		})
 		return
 	}
 
 	var req models.CreateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		response.WriteErrorResponse(w, http.StatusBadRequest, response.APIError{
+			Code:    "400",
+			Msg:     "Invalid Request Body",
+			Details: "Failed to decode JSON body",
+		})
 		return
 	}
 
 	// Validate input
 	if len(req.Username) == 0 || len(req.Password) < 6 {
-		http.Error(w, "Username and password are required, and password must be at least 6 characters", http.StatusBadRequest)
+		response.WriteErrorResponse(w, http.StatusBadRequest, response.APIError{
+			Code:    "400",
+			Msg:     "Invalid Input",
+			Details: "Username is required and password must be at least 6 characters long",
+		})
 		return
 	}
 
 	// Hash the password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		http.Error(w, "Error hashing password", http.StatusInternalServerError)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Internal Server Error",
+			Details: "Failed to hash the password",
+		})
 		return
 	}
 
@@ -42,21 +59,31 @@ func CreateUserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	query := "INSERT INTO users (username, password_hash) VALUES (?, ?)"
 	result, err := db.Exec(query, req.Username, hashedPassword)
 	if err != nil {
-		// Check for MySQL-specific errors
 		if mysqlErr, ok := err.(*mysql.MySQLError); ok {
 			if mysqlErr.Number == 1062 { // Duplicate entry error
-				http.Error(w, "Username already exists", http.StatusConflict)
+				response.WriteErrorResponse(w, http.StatusConflict, response.APIError{
+					Code:    "409",
+					Msg:     "Conflict",
+					Details: "Username already exists",
+				})
 				return
 			}
 		}
-
-		http.Error(w, fmt.Sprintf("Error creating user: %v", err), http.StatusInternalServerError)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Internal Server Error",
+			Details: "Failed to insert user into database",
+		})
 		return
 	}
 
 	userID, err := result.LastInsertId()
 	if err != nil {
-		http.Error(w, "Error retrieving new user ID", http.StatusInternalServerError)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Internal Server Error",
+			Details: "Failed to retrieve new user ID",
+		})
 		return
 	}
 
@@ -64,9 +91,7 @@ func CreateUserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	utils.LogAction(db, int(userID), "Create User", "New user created successfully")
 
 	// Respond with success
-	response := models.CreateUserResponse{
-		Message: "User created successfully",
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	response.WriteSuccessResponse(w, map[string]interface{}{
+		"user_id": userID,
+	}, "User created successfully")
 }
