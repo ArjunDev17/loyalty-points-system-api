@@ -15,5 +15,27 @@ type PointsHistoryResponse struct {
 	Points          int       `json:"points"`
 	TransactionType string    `json:"transaction_type"`
 	TransactionDate time.Time `json:"transaction_date"`
-	Reason          string    `json:"reason,omitempty"` // Optional: only for expired transactions
+	//Reason          string    `json:"reason,omitempty"` // Optional: only for expired transactions
+}
+
+type RedeemRequest struct {
+	UserID int `json:"user_id"`
+	Points int `json:"points"`
+}
+
+type RedeemResponse struct {
+	Success         bool   `json:"success"`
+	Message         string `json:"message"`
+	RemainingPoints int    `json:"remaining_points"`
+}
+
+type PointsHistory struct {
+	TransactionDate string `json:"transaction_date"`
+	Points          int    `json:"points"`
+	Reason          string `json:"reason"`
+}
+
+type PointsBalanceResponse struct {
+	Balance int             `json:"balance"`
+	History []PointsHistory `json:"history"`
 }

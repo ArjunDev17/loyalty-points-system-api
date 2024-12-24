@@ -3,21 +3,11 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"loyalty-points-system-api/internal/models"
 	"net/http"
 
 	"strconv"
 )
-
-type PointsHistory struct {
-	TransactionDate string `json:"transaction_date"`
-	Points          int    `json:"points"`
-	Reason          string `json:"reason"`
-}
-
-type PointsBalanceResponse struct {
-	Balance int             `json:"balance"`
-	History []PointsHistory `json:"history"`
-}
 
 // PointsBalanceHandler returns the user's current points balance and history
 func PointsBalanceHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
@@ -52,7 +42,7 @@ func PointsBalanceHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 
 	// Get the user's points history
-	history := []PointsHistory{}
+	history := []models.PointsHistory{}
 	query := `SELECT transaction_date, points, category FROM transactions WHERE user_id = ? ORDER BY transaction_date DESC LIMIT ? OFFSET ?`
 	rows, err := db.Query(query, userID, pageSize, offset)
 	if err != nil {
@@ -62,7 +52,7 @@ func PointsBalanceHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	defer rows.Close()
 
 	for rows.Next() {
-		var record PointsHistory
+		var record models.PointsHistory
 		var category string
 		if err := rows.Scan(&record.TransactionDate, &record.Points, &category); err != nil {
 			http.Error(w, "Error scanning points history", http.StatusInternalServerError)
@@ -74,7 +64,7 @@ func PointsBalanceHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	// Respond with balance and history
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(PointsBalanceResponse{
+	json.NewEncoder(w).Encode(models.PointsBalanceResponse{
 		Balance: balance,
 		History: history,
 	})

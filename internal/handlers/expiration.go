@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
+	"loyalty-points-system-api/internal/utils"
 )
 
 // ExpirePoints runs periodically to mark points as expired
@@ -61,6 +63,8 @@ func ExpirePoints(db *sql.DB) {
 
 		// Deduct expired points from user's balance (optional if using sum queries)
 		log.Printf("User %d: Expired %d points", userID, expiredPoints)
+		// Log expired points in audit log
+		utils.LogAction(db, userID, "Expire Points", fmt.Sprintf("Expired %d points", expiredPoints))
 	}
 
 	// Commit the transaction

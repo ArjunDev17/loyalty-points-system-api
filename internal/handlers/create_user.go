@@ -4,29 +4,22 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"loyalty-points-system-api/internal/models"
+	"loyalty-points-system-api/internal/utils"
 	"net/http"
 
 	"github.com/go-sql-driver/mysql"
 	"golang.org/x/crypto/bcrypt"
 )
 
-type CreateUserRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-type CreateUserResponse struct {
-	Message string `json:"message"`
-}
-
-// CreateUserHandler handles user creation
+// CreateUserHandler handles user creation and logs the action
 func CreateUserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	var req CreateUserRequest
+	var req models.CreateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -47,7 +40,7 @@ func CreateUserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	// Insert user into the database
 	query := "INSERT INTO users (username, password_hash) VALUES (?, ?)"
-	_, err = db.Exec(query, req.Username, hashedPassword)
+	result, err := db.Exec(query, req.Username, hashedPassword)
 	if err != nil {
 		// Check for MySQL-specific errors
 		if mysqlErr, ok := err.(*mysql.MySQLError); ok {
@@ -61,8 +54,17 @@ func CreateUserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
+	userID, err := result.LastInsertId()
+	if err != nil {
+		http.Error(w, "Error retrieving new user ID", http.StatusInternalServerError)
+		return
+	}
+
+	// Log the user creation action
+	utils.LogAction(db, int(userID), "Create User", "New user created successfully")
+
 	// Respond with success
-	response := CreateUserResponse{
+	response := models.CreateUserResponse{
 		Message: "User created successfully",
 	}
 	w.Header().Set("Content-Type", "application/json")
