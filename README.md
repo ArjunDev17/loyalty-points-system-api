@@ -39,15 +39,35 @@ CREATE DATABASE loyalty_db;
 USE loyalty_db;
 
 CREATE TABLE users (
-    id INT AUTO_INCREMENT PRIMARY KEY,
+    id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     username VARCHAR(255) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    refresh_token VARCHAR(255),
+    refresh_token_expires_at TIMESTAMP,
+    loyalty_points INT DEFAULT 0
+);
+
+CREATE TABLE audit_log (
+    id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    action VARCHAR(255) NOT NULL,
+    details TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE points (
-    id INT AUTO_INCREMENT PRIMARY KEY,
+CREATE TABLE expired_points_log (
+    id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
+    expired_points INT NOT NULL,
+    expired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE points (
+    id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    transaction_id VARCHAR(255) NOT NULL,
     points INT NOT NULL,
     transaction_type ENUM('Earned', 'Redeemed', 'Expired') NOT NULL,
     transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -56,11 +76,15 @@ CREATE TABLE points (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
-CREATE TABLE expired_points_log (
-    id INT AUTO_INCREMENT PRIMARY KEY,
+CREATE TABLE transactions (
+    id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    transaction_id VARCHAR(255) NOT NULL UNIQUE,
     user_id INT NOT NULL,
-    expired_points INT NOT NULL,
-    expired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    transaction_amount DECIMAL(10, 2) NOT NULL,
+    category VARCHAR(50) NOT NULL,
+    transaction_date TIMESTAMP NOT NULL,
+    product_code VARCHAR(255),
+    points INT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 ```
