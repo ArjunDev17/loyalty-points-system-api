@@ -6,6 +6,7 @@ import (
 
 	"loyalty-points-system-api/config"
 	"loyalty-points-system-api/internal/handlers"
+	"loyalty-points-system-api/pkg/middleware"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/robfig/cron/v3" // For scheduling the points expiration service
@@ -45,24 +46,29 @@ func main() {
 		handlers.CreateUserHandler(w, r, db)
 	})
 
-	// Add Transaction API route
-	http.HandleFunc("/add-transaction", func(w http.ResponseWriter, r *http.Request) {
+	// Add Transaction API route with middleware
+	http.Handle("/add-transaction", middleware.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handlers.AddTransactionHandler(w, r, db)
-	})
+	})))
 
-	// Points Balance API route
-	http.HandleFunc("/points-balance", func(w http.ResponseWriter, r *http.Request) {
+	// Points Balance API route with middleware
+	http.Handle("/points-balance", middleware.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handlers.PointsBalanceHandler(w, r, db)
-	})
+	})))
 
-	// Redeem Points API route
-	http.HandleFunc("/redeem", func(w http.ResponseWriter, r *http.Request) {
+	// Redeem Points API route with middleware
+	http.Handle("/redeem", middleware.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handlers.RedeemPointsHandler(w, r, db)
-	})
-	http.HandleFunc("/points-history", func(w http.ResponseWriter, r *http.Request) {
-		handlers.PointsHistoryHandler(w, r, db)
-	})
+	})))
 
+	// Points History API route with middleware
+	http.Handle("/points-history", middleware.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlers.PointsHistoryHandler(w, r, db)
+	})))
+
+	http.HandleFunc("/get-all-users", func(w http.ResponseWriter, r *http.Request) {
+		handlers.GetAllUsersHandler(w, r, db)
+	})
 	// Start the server
 	log.Printf("Starting server on port %s...", cfg.AppPort)
 	err = http.ListenAndServe(":"+cfg.AppPort, nil)

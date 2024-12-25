@@ -8,6 +8,7 @@ import (
 	"loyalty-points-system-api/internal/models"
 	response "loyalty-points-system-api/internal/reponse"
 	utils "loyalty-points-system-api/internal/utils"
+	"loyalty-points-system-api/pkg/middleware"
 	"net/http"
 	"time"
 )
@@ -16,12 +17,53 @@ import (
 func AddTransactionHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	log.Println("AddTransactionHandler: Starting to process add transaction request.")
 
+	// Extract the username from the token (context)
+	tokenUsername, ok := r.Context().Value(middleware.UserIDKey).(string)
+	if !ok {
+		response.WriteErrorResponse(w, http.StatusUnauthorized, response.APIError{
+			Code:    "401",
+			Msg:     "Unauthorized",
+			Details: "Failed to extract user information from token",
+		})
+		return
+	}
+
+	// Parse the request body
 	var req models.AddTransactionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.WriteErrorResponse(w, http.StatusBadRequest, response.APIError{
 			Code:    "400",
 			Msg:     "Invalid Request Payload",
 			Details: "Failed to decode JSON body",
+		})
+		return
+	}
+
+	// Validate that the user_id in the request matches the logged-in user
+	var dbUsername string
+	err := db.QueryRow("SELECT username FROM users WHERE id = ?", req.UserID).Scan(&dbUsername)
+	if err == sql.ErrNoRows {
+		response.WriteErrorResponse(w, http.StatusNotFound, response.APIError{
+			Code:    "404",
+			Msg:     "User Not Found",
+			Details: "User ID does not exist",
+		})
+		return
+	} else if err != nil {
+		log.Printf("Error fetching user data: %v", err)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Internal Server Error",
+			Details: "Failed to fetch user data",
+		})
+		return
+	}
+
+	if tokenUsername != dbUsername {
+		response.WriteErrorResponse(w, http.StatusForbidden, response.APIError{
+			Code:    "403",
+			Msg:     "Forbidden",
+			Details: "You can only create transactions for your own account",
 		})
 		return
 	}
@@ -46,6 +88,7 @@ func AddTransactionHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	pointsEarned := int(req.TransactionAmount * multiplier)
 	log.Printf("Calculated %d points for user %d in category %s", pointsEarned, req.UserID, req.Category)
 
+	// Begin transaction
 	tx, err := db.Begin()
 	if err != nil {
 		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
@@ -57,7 +100,7 @@ func AddTransactionHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	defer tx.Rollback()
 
-	// 1. Record the transaction
+	// Record the transaction
 	_, err = tx.Exec(`
 		INSERT INTO transactions (
 			transaction_id, user_id, transaction_amount, 
@@ -76,7 +119,7 @@ func AddTransactionHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
-	// 2. Add points record
+	// Add points record
 	validUntil := time.Now().AddDate(1, 0, 0) // Points valid for 1 year
 	_, err = tx.Exec(`
 		INSERT INTO points (
@@ -96,8 +139,8 @@ func AddTransactionHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
-	// 3. Update user's total loyalty points
-	result, err := tx.Exec(`
+	// Update user's total loyalty points
+	_, err = tx.Exec(`
 		UPDATE users 
 		SET loyalty_points = loyalty_points + ? 
 		WHERE id = ?`,
@@ -109,16 +152,6 @@ func AddTransactionHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			Code:    "500",
 			Msg:     "Transaction Error",
 			Details: "Could not update user points",
-		})
-		return
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		response.WriteErrorResponse(w, http.StatusNotFound, response.APIError{
-			Code:    "404",
-			Msg:     "User Not Found",
-			Details: "Could not find user to update points",
 		})
 		return
 	}
@@ -148,6 +181,5 @@ func AddTransactionHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	response.WriteSuccessResponse(w, models.AddTransactionResponse{
 		Message: "Transaction recorded successfully",
 		Points:  pointsEarned,
-		// CurrentBalance: currentPoints,
 	}, "Transaction recorded successfully")
 }
