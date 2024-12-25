@@ -6,21 +6,27 @@ import (
 	"fmt"
 	"log"
 	"loyalty-points-system-api/internal/models"
+	response "loyalty-points-system-api/internal/reponse"
 	utils "loyalty-points-system-api/internal/utils"
 	"net/http"
+	"time"
 )
 
-// AddTransactionHandler records a user's purchase transaction and logs the action
+// AddTransactionHandler - Adds transaction and updates points consistently
 func AddTransactionHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
-	// Parse the request body
+	log.Println("AddTransactionHandler: Starting to process add transaction request.")
+
 	var req models.AddTransactionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Println("Error decoding request payload:", err)
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		response.WriteErrorResponse(w, http.StatusBadRequest, response.APIError{
+			Code:    "400",
+			Msg:     "Invalid Request Payload",
+			Details: "Failed to decode JSON body",
+		})
 		return
 	}
 
-	// Validate category and calculate points multiplier
+	// Calculate points based on category
 	categoryMultipliers := map[string]float64{
 		"electronics": 1.0,
 		"groceries":   2.0,
@@ -29,42 +35,119 @@ func AddTransactionHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	multiplier, ok := categoryMultipliers[req.Category]
 	if !ok {
-		log.Println("Invalid category provided:", req.Category)
-		http.Error(w, "Invalid category", http.StatusBadRequest)
+		response.WriteErrorResponse(w, http.StatusBadRequest, response.APIError{
+			Code:    "400",
+			Msg:     "Invalid Category",
+			Details: "The category provided is not valid",
+		})
 		return
 	}
 
-	// Calculate points
-	points := int(req.TransactionAmount * multiplier)
-	log.Printf("Calculated %d points for user %d in category %s", points, req.UserID, req.Category)
+	pointsEarned := int(req.TransactionAmount * multiplier)
+	log.Printf("Calculated %d points for user %d in category %s", pointsEarned, req.UserID, req.Category)
 
-	// Record the transaction in the database
-	query := `INSERT INTO transactions (transaction_id, user_id, transaction_amount, category, transaction_date, product_code, points) 
-	          VALUES (?, ?, ?, ?, ?, ?, ?)`
-	_, err := db.Exec(query, req.TransactionID, req.UserID, req.TransactionAmount, req.Category, req.TransactionDate, req.ProductCode, points)
+	tx, err := db.Begin()
 	if err != nil {
-		log.Println("Error recording transaction:", err)
-		http.Error(w, "Could not record transaction", http.StatusInternalServerError)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Transaction Error",
+			Details: "Failed to start database transaction",
+		})
 		return
 	}
-	log.Printf("Transaction %s recorded successfully for user %d", req.TransactionID, req.UserID)
+	defer tx.Rollback()
 
-	// Update the user's loyalty points balance
-	_, err = db.Exec("UPDATE users SET loyalty_points = loyalty_points + ? WHERE id = ?", points, req.UserID)
+	// 1. Record the transaction
+	_, err = tx.Exec(`
+		INSERT INTO transactions (
+			transaction_id, user_id, transaction_amount, 
+			category, transaction_date, product_code, points
+		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		req.TransactionID, req.UserID, req.TransactionAmount,
+		req.Category, req.TransactionDate, req.ProductCode, pointsEarned,
+	)
 	if err != nil {
-		log.Println("Error updating loyalty points for user:", req.UserID, "Error:", err)
-		http.Error(w, "Could not update loyalty points", http.StatusInternalServerError)
+		log.Printf("Error recording transaction: %v", err)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Transaction Error",
+			Details: "Could not record transaction",
+		})
 		return
 	}
-	log.Printf("Updated loyalty points for user %d by %d points", req.UserID, points)
 
-	// Log the transaction action
-	utils.LogAction(db, req.UserID, "Add Transaction", fmt.Sprintf("Transaction ID %s recorded with %d points", req.TransactionID, points))
+	// 2. Add points record
+	validUntil := time.Now().AddDate(1, 0, 0) // Points valid for 1 year
+	_, err = tx.Exec(`
+		INSERT INTO points (
+			user_id, transaction_id, points, 
+			transaction_type, transaction_date, valid_until, reason
+		) VALUES (?, ?, ?, 'Earned', ?, ?, ?)`,
+		req.UserID, req.TransactionID, pointsEarned,
+		req.TransactionDate, validUntil, "Purchase",
+	)
+	if err != nil {
+		log.Printf("Error recording points: %v", err)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Transaction Error",
+			Details: "Could not record points",
+		})
+		return
+	}
 
-	// Respond with success message and points
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(models.AddTransactionResponse{
+	// 3. Update user's total loyalty points
+	result, err := tx.Exec(`
+		UPDATE users 
+		SET loyalty_points = loyalty_points + ? 
+		WHERE id = ?`,
+		pointsEarned, req.UserID,
+	)
+	if err != nil {
+		log.Printf("Error updating user points: %v", err)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Transaction Error",
+			Details: "Could not update user points",
+		})
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		response.WriteErrorResponse(w, http.StatusNotFound, response.APIError{
+			Code:    "404",
+			Msg:     "User Not Found",
+			Details: "Could not find user to update points",
+		})
+		return
+	}
+
+	// Commit transaction
+	if err = tx.Commit(); err != nil {
+		log.Printf("Error committing transaction: %v", err)
+		response.WriteErrorResponse(w, http.StatusInternalServerError, response.APIError{
+			Code:    "500",
+			Msg:     "Transaction Error",
+			Details: "Could not commit transaction",
+		})
+		return
+	}
+
+	// Get updated balance
+	var currentPoints int
+	err = db.QueryRow("SELECT loyalty_points FROM users WHERE id = ?", req.UserID).Scan(&currentPoints)
+	if err != nil {
+		log.Printf("Error fetching updated points balance: %v", err)
+	}
+
+	utils.LogAction(db, req.UserID, "Add Transaction",
+		fmt.Sprintf("Transaction %s: Earned %d points. New balance: %d",
+			req.TransactionID, pointsEarned, currentPoints))
+
+	response.WriteSuccessResponse(w, models.AddTransactionResponse{
 		Message: "Transaction recorded successfully",
-		Points:  points,
-	})
+		Points:  pointsEarned,
+		// CurrentBalance: currentPoints,
+	}, "Transaction recorded successfully")
 }
