@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
@@ -43,7 +44,7 @@ func LoadConfig(env string) *Config {
 }
 
 func ConnectDB(cfg *Config) *sql.DB {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true",
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&timeout=30s&readTimeout=30s&writeTimeout=30s",
 		cfg.DBUser, cfg.DBPassword, cfg.DBHost, cfg.DBPort, cfg.DBName,
 	)
 
@@ -52,10 +53,22 @@ func ConnectDB(cfg *Config) *sql.DB {
 		log.Fatalf("Could not connect to the database: %v", err)
 	}
 
-	if err := db.Ping(); err != nil {
-		log.Fatalf("Could not ping the database: %v", err)
+	db.SetMaxOpenConns(10) // Reduced for better stability
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(1 * time.Minute)
+	db.SetConnMaxIdleTime(30 * time.Second)
+
+	// Verify connection
+	for i := 0; i < 3; i++ {
+		if err := db.Ping(); err != nil {
+			log.Printf("Failed to ping database (attempt %d/3): %v", i+1, err)
+			time.Sleep(time.Second * time.Duration(i+1))
+			continue
+		}
+		log.Println("Connected to the MySQL database successfully.")
+		return db
 	}
 
-	log.Println("Connected to the MySQL database successfully.")
-	return db
+	log.Fatalf("Could not establish stable connection to the database after 3 attempts")
+	return nil
 }
