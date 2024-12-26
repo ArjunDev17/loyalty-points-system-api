@@ -2,14 +2,12 @@ package handlers
 
 import (
 	"database/sql"
-	"fmt"
 	"log"
-	"loyalty-points-system-api/internal/utils"
 )
 
 // ExpirePoints runs periodically to mark points as expired
 func ExpirePoints(db *sql.DB) {
-	log.Println("Starting points expiration job...")
+	log.Println("ExpirePoints: Starting points expiration job...")
 
 	// Start a transaction
 	tx, err := db.Begin()
@@ -17,6 +15,19 @@ func ExpirePoints(db *sql.DB) {
 		log.Println("Failed to start transaction:", err)
 		return
 	}
+	defer tx.Rollback()
+
+	// Debugging: Check how many rows match the condition
+	var count int
+	err = tx.QueryRow(`
+		SELECT COUNT(*) FROM points
+		WHERE valid_until < NOW() AND transaction_type = 'Earned'
+	`).Scan(&count)
+	if err != nil {
+		log.Println("Error fetching count of expired points:", err)
+		return
+	}
+	log.Printf("ExpirePoints: Found %d expired points to process.", count)
 
 	// Find points that have expired
 	rows, err := tx.Query(`
@@ -25,7 +36,6 @@ func ExpirePoints(db *sql.DB) {
 	`)
 	if err != nil {
 		log.Println("Failed to query expired points:", err)
-		tx.Rollback()
 		return
 	}
 	defer rows.Close()
@@ -35,36 +45,41 @@ func ExpirePoints(db *sql.DB) {
 		var id, userID, expiredPoints int
 		if err := rows.Scan(&id, &userID, &expiredPoints); err != nil {
 			log.Println("Failed to scan expired points row:", err)
-			tx.Rollback()
 			return
 		}
+		log.Printf("ExpirePoints: Processing row: ID=%d, UserID=%d, Points=%d", id, userID, expiredPoints)
 
-		// Log the expired points in the points table
-		_, err := tx.Exec(`
+		// Update points table
+		_, err = tx.Exec(`
 			UPDATE points SET transaction_type = 'Expired', reason = 'Expired'
 			WHERE id = ?
 		`, id)
 		if err != nil {
-			log.Println("Failed to mark points as expired:", err)
-			tx.Rollback()
+			log.Printf("Failed to mark points as expired for ID=%d: %v", id, err)
 			return
 		}
 
-		// Log the expired points in a separate table
+		// Deduct points from user's balance
 		_, err = tx.Exec(`
-			INSERT INTO expired_points_log (user_id, expired_points)
-			VALUES (?, ?)
+			UPDATE users SET loyalty_points = loyalty_points - ?
+			WHERE id = ?
+		`, expiredPoints, userID)
+		if err != nil {
+			log.Printf("Failed to update user's loyalty points for UserID=%d: %v", userID, err)
+			return
+		}
+
+		// Log the expired points
+		_, err = tx.Exec(`
+			INSERT INTO expired_points_log (user_id, expired_points, expired_at)
+			VALUES (?, ?, NOW())
 		`, userID, expiredPoints)
 		if err != nil {
-			log.Println("Failed to log expired points:", err)
-			tx.Rollback()
+			log.Printf("Failed to log expired points for UserID=%d: %v", userID, err)
 			return
 		}
 
-		// Deduct expired points from user's balance (optional if using sum queries)
-		log.Printf("User %d: Expired %d points", userID, expiredPoints)
-		// Log expired points in audit log
-		utils.LogAction(db, userID, "Expire Points", fmt.Sprintf("Expired %d points", expiredPoints))
+		log.Printf("ExpirePoints: Expired %d points for UserID=%d (Row ID=%d)", expiredPoints, userID, id)
 	}
 
 	// Commit the transaction
@@ -72,5 +87,5 @@ func ExpirePoints(db *sql.DB) {
 		log.Println("Failed to commit transaction:", err)
 		return
 	}
-	log.Println("Points expiration job completed successfully.")
+	log.Println("ExpirePoints: Points expiration job completed successfully.")
 }

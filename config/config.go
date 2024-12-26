@@ -23,26 +23,31 @@ type Config struct {
 	PointsExpirationDays int
 }
 
-func LoadConfig(env string) *Config {
+// LoadConfig loads configuration from .env file
+func LoadConfig(env string) (*Config, error) {
 	err := godotenv.Load("config/env/" + env + ".env")
 	if err != nil {
-		log.Fatalf("Error loading %s environment file: %v", env, err)
+		return nil, fmt.Errorf("error loading %s environment file: %w", env, err)
 	}
 
-	expirationDays, _ := strconv.Atoi(os.Getenv("POINTS_EXPIRATION_DAYS"))
+	expirationDays, err := strconv.Atoi(getEnv("POINTS_EXPIRATION_DAYS", "30")) // Default to 30 days
+	if err != nil {
+		return nil, fmt.Errorf("invalid POINTS_EXPIRATION_DAYS: %w", err)
+	}
 
 	return &Config{
-		AppPort:              os.Getenv("APP_PORT"),
-		DBHost:               os.Getenv("DB_HOST"),
-		DBPort:               os.Getenv("DB_PORT"),
-		DBUser:               os.Getenv("DB_USER"),
-		DBPassword:           os.Getenv("DB_PASSWORD"),
-		DBName:               os.Getenv("DB_NAME"),
-		JWTSecret:            os.Getenv("JWT_SECRET"),
+		AppPort:              getEnv("APP_PORT", "8080"),
+		DBHost:               getEnv("DB_HOST", "localhost"),
+		DBPort:               getEnv("DB_PORT", "3306"),
+		DBUser:               getEnv("DB_USER", "root"),
+		DBPassword:           getEnv("DB_PASSWORD", ""),
+		DBName:               getEnv("DB_NAME", "loyalty_db"),
+		JWTSecret:            getEnv("JWT_SECRET", "defaultsecret"),
 		PointsExpirationDays: expirationDays,
-	}
+	}, nil
 }
 
+// ConnectDB connects to the database
 func ConnectDB(cfg *Config) *sql.DB {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&timeout=30s&readTimeout=30s&writeTimeout=30s",
 		cfg.DBUser, cfg.DBPassword, cfg.DBHost, cfg.DBPort, cfg.DBName,
@@ -53,12 +58,12 @@ func ConnectDB(cfg *Config) *sql.DB {
 		log.Fatalf("Could not connect to the database: %v", err)
 	}
 
-	db.SetMaxOpenConns(10) // Reduced for better stability
+	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(1 * time.Minute)
 	db.SetConnMaxIdleTime(30 * time.Second)
 
-	// Verify connection
+	// Retry database ping with exponential backoff
 	for i := 0; i < 3; i++ {
 		if err := db.Ping(); err != nil {
 			log.Printf("Failed to ping database (attempt %d/3): %v", i+1, err)
@@ -71,4 +76,12 @@ func ConnectDB(cfg *Config) *sql.DB {
 
 	log.Fatalf("Could not establish stable connection to the database after 3 attempts")
 	return nil
+}
+
+// Helper to get environment variables with default fallback
+func getEnv(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }
